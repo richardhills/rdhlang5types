@@ -1,9 +1,9 @@
 from unittest import main
 from unittest.case import TestCase
 
-from lib import Object, StringType, IntegerType, AnyType, get_manager, \
-    ObjectType, Const, PythonObjectType, CompositeType, UnitType,\
-    get_type_of_value
+from rdhlang5_types.composites import Object, get_manager, get_type_of_value
+from rdhlang5_types.core_types import StringType, AnyType, IntegerType, UnitType
+from rdhlang5_types.object_types import ObjectType, Const, PythonObjectType
 
 
 class TestObject(TestCase):

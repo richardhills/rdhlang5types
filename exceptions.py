@@ -1,3 +1,0 @@
-
-class FatalError(Exception):
-    pass
