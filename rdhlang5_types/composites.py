@@ -3,7 +3,7 @@ import weakref
 
 from rdhlang5_types.core_types import unwrap_types, Type, UnitType, NoValueType
 from rdhlang5_types.exceptions import FatalError, MicroOpTypeConflict, MissingMicroOp, \
-    InvalidData, InvalidDereferenceKey
+    InvalidData, InvalidDereferenceKey, InvalidAssignmentKey
 from rdhlang5_types.micro_ops import MicroOpType, MicroOp, merge_micro_op_types
 from rdhlang5_types.runtime import replace_all_refs
 
@@ -217,20 +217,23 @@ class RDHList(MutableSequence):
             self.length = max(self.length, key + 1)
             return
 
-        manager = get_manager(self)
-        default_type = manager.default_type
-        micro_op_type = manager.get_micro_op_type(default_type, ("set", key))
-        if micro_op_type is not None:
-            micro_op = micro_op_type.create(self, default_type)
-            micro_op.invoke(value)
-        else:
-            micro_op_type = manager.get_micro_op_type(default_type, ("set-wildcard",))
-
-            if micro_op_type is None:
-                raise MissingMicroOp()
-
-            micro_op = micro_op_type.create(self, default_type)
-            micro_op.invoke(key, value)
+        try:
+            manager = get_manager(self)
+            default_type = manager.default_type
+            micro_op_type = manager.get_micro_op_type(default_type, ("set", key))
+            if micro_op_type is not None:
+                micro_op = micro_op_type.create(self, default_type)
+                micro_op.invoke(value)
+            else:
+                micro_op_type = manager.get_micro_op_type(default_type, ("set-wildcard",))
+    
+                if micro_op_type is None:
+                    raise MissingMicroOp()
+    
+                micro_op = micro_op_type.create(self, default_type)
+                micro_op.invoke(key, value)
+        except InvalidAssignmentKey:
+            raise IndexError()
 
     def __getitem__(self, key, raw=False):
         if key in ("__dict__",):

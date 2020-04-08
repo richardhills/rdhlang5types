@@ -828,5 +828,13 @@ class TestList(TestCase):
         foo.insert(4, 12)
         self.assertEqual(list(foo), [ 4, 6, 8, SPARSE_ELEMENT, 12 ])
 
+    def test_set_on_non_sparse_blocked(self):
+        foo = [ 4, 6, 8 ]
+        get_manager(foo).add_composite_type(ListType([ ], IntegerType(), is_sparse=False))
+
+        with self.assertRaises(IndexError):
+            foo[4] = 12
+
+
 if __name__ == '__main__':
     main()
