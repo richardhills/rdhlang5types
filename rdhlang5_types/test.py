@@ -708,7 +708,6 @@ class TestListType(TestCase):
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_pushing_into_long_tuple(self):
-        return # long tuples don't work yet
         foo = ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False)
         bar = ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False, allow_wildcard_insert=False)
 
@@ -808,7 +807,6 @@ class TestList(TestCase):
         self.assertEqual(list(foo), [ 2, 4, 6, 8 ])
 
     def test_insert_on_long_tuple(self):
-        return # long tuples don't work yet
         foo = [ 4, 6, 8 ]
         get_manager(foo).add_composite_type(ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
 

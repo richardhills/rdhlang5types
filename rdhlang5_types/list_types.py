@@ -195,9 +195,14 @@ class ListGetterType(MicroOpType):
                 if self.key < other_key:
                     return False
                 elif self.key == other_key:
-                    return not self.type.is_copyable_from(other_type)
+                    if not self.type_error and not other_micro_op_type.type_error and not self.type.is_copyable_from(other_type):
+                        return True
                 else:
-                    return True  # Be more liberal, check for other microops at key - 1
+                    prior_micro_op = other_micro_op_types.get(("get", self.key - 1), None)
+                    if not prior_micro_op:
+                        return True
+                    if not self.type_error and not prior_micro_op.type_error and not self.type.is_copyable_from(prior_micro_op.type):
+                        return True
             else:
                 other_key, other_type = get_key_and_type(other_micro_op_type)
                 if not self.type.is_copyable_from(other_type):
@@ -206,8 +211,11 @@ class ListGetterType(MicroOpType):
             other_key, _ = get_key_and_type(other_micro_op_type)
             if other_key is not WILDCARD and self.key < other_key:
                 return False
-
-            return True  # Be more liberal: check for default factories and microops at key - 1
+            post_opcode = other_micro_op_types.get(("get", self.key + 1), None)
+            if not post_opcode:
+                return True
+            if not self.type_error and not post_opcode.type_error and not self.type.is_copyable_from(post_opcode.type):
+                return True
         return False
 
     def raise_on_micro_op_conflict(self, other_micro_op, args):
@@ -587,7 +595,11 @@ class ListInsertType(MicroOpType):
                 elif self.key == other_key:
                     return not other_type.is_copyable_from(self.type)
                 elif self.key < other_key:
-                    return True # TODO: be more liberal
+                    prior_micro_op = other_micro_op_types.get(("get", other_key - 1), None)
+                    if prior_micro_op is None:
+                        return True
+                    if not self.type_error and not prior_micro_op.type_error and not other_micro_op_type.type.is_copyable_from(prior_micro_op.type):
+                        return True
             else:
                 return not other_type.is_copyable_from(self.type)
         return False
