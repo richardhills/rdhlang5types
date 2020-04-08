@@ -1,7 +1,7 @@
 from collections import defaultdict, MutableSequence
 import weakref
 
-from rdhlang5_types.core_types import unwrap_types, Type, UnitType
+from rdhlang5_types.core_types import unwrap_types, Type, UnitType, NoValueType
 from rdhlang5_types.exceptions import FatalError, MicroOpTypeConflict, MissingMicroOp, \
     InvalidData, InvalidDereferenceKey
 from rdhlang5_types.micro_ops import MicroOpType, MicroOp, merge_micro_op_types
@@ -175,16 +175,25 @@ class RDHObject(object):
 def create_rdh_object_type(base_class):
     return type(base_class.__name__, (base_class, RDHObject,), {})
 
+SPARSE_ELEMENT = object()
+
 class RDHList(MutableSequence):
     def __init__(self, initial_data):
-        self.wrapped = list(initial_data)
+        self.wrapped = {
+            index: value for index, value in enumerate(initial_data)
+        }
+        self.length = len(initial_data)
 
     def __len__(self):
-        return self.wrapped.__len__()
+        return self.length
 
     def insert(self, index, element, raw=False):
         if raw:
-            return self.wrapped.insert(index, element)
+            for i in reversed(range(index, self.length)):
+                self.wrapped[i + 1] = self.wrapped[i]
+            self.wrapped[index] = element
+            self.length = max(index + 1, self.length + 1)
+            return
 
         manager = get_manager(self)
         default_type = manager.default_type
@@ -204,7 +213,9 @@ class RDHList(MutableSequence):
 
     def __setitem__(self, key, value, raw=False):
         if raw:
-            return self.wrapped.__setitem__(key, value)
+            self.wrapped[key] = value
+            self.length = max(self.length, key + 1)
+            return
 
         manager = get_manager(self)
         default_type = manager.default_type
@@ -226,7 +237,9 @@ class RDHList(MutableSequence):
             return super(RDHObject, self).__getattribute__(key)
 
         if raw:
-            return self.wrapped.__getitem__(key)
+            if key < 0 or key >= self.length:
+                raise FatalError()
+            return self.wrapped.get(key, SPARSE_ELEMENT)
 
         try:
             manager = get_manager(self)
@@ -244,11 +257,16 @@ class RDHList(MutableSequence):
                 micro_op = micro_op_type.create(self, default_type)
                 return micro_op.invoke(key)
         except InvalidDereferenceKey:
+            if key >= 0 and key < self.length:
+                return None
             raise IndexError()
 
     def __delitem__(self, key, raw=False):
         if raw:
-            return self.wrapped.__delitem__(key)
+            for i in reversed(range(key, self.length)):
+                self.wrapped[i - 1] = self.wrapped[i]
+            self.length -= 1
+            return
 
         manager = get_manager(self)
         default_type = manager.default_type
@@ -306,7 +324,9 @@ def get_type_of_value(value):
         return UnitType(value)
     if isinstance(value, (RDHObject, RDHList)):
         return CompositeType(get_manager(value).get_merged_micro_op_types(), value)
-    raise InvalidData()
+    if value is None:
+        return NoValueType()
+    raise InvalidData(value)
 
 class DefaultFactoryType(MicroOpType):
     def __init__(self, type):

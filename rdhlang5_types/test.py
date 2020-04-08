@@ -4,8 +4,9 @@ from unittest.case import TestCase
 from munch import Munch
 
 from rdhlang5_types.composites import get_manager, get_type_of_value, \
-    RDHList, CompositeType, RDHObject
-from rdhlang5_types.core_types import StringType, AnyType, IntegerType, UnitType
+    RDHList, CompositeType, RDHObject, SPARSE_ELEMENT
+from rdhlang5_types.core_types import StringType, AnyType, IntegerType, UnitType, \
+    OneOfType, NoValueType
 from rdhlang5_types.exceptions import InvalidDereferenceKey
 from rdhlang5_types.list_types import ListType
 from rdhlang5_types.object_types import ObjectType, Const, PythonObjectType, \
@@ -812,6 +813,20 @@ class TestList(TestCase):
 
         foo.insert(0, 2)
         self.assertEqual(list(foo), [ 2, 4, 6, 8 ])
+
+    def test_sparse_list_setting(self):
+        foo = [ 4, 6, 8 ]
+        get_manager(foo).add_composite_type(ListType([ ], IntegerType(), is_sparse=True))
+
+        foo[4] = 12
+        self.assertEqual(list(foo), [ 4, 6, 8, SPARSE_ELEMENT, 12 ])
+
+    def test_sparse_list_inserting(self):
+        foo = [ 4, 6, 8 ]
+        get_manager(foo).add_composite_type(ListType([ ], IntegerType(), is_sparse=True))
+
+        foo.insert(4, 12)
+        self.assertEqual(list(foo), [ 4, 6, 8, SPARSE_ELEMENT, 12 ])
 
 if __name__ == '__main__':
     main()

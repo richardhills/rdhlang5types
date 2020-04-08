@@ -1,5 +1,5 @@
 from rdhlang5_types.composites import get_type_of_value, get_manager, \
-    bind_type_to_value, CompositeType, DefaultFactoryType
+    bind_type_to_value, CompositeType, DefaultFactoryType, SPARSE_ELEMENT
 from rdhlang5_types.core_types import Const, merge_types
 from rdhlang5_types.exceptions import FatalError, MicroOpConflict, raise_if_safe, \
     MicroOpTypeConflict, InvalidAssignmentType, InvalidDereferenceKey, \
@@ -110,7 +110,7 @@ class ListWildcardGetterType(MicroOpType):
             return True
 
         if not self.type_error:
-            for value in obj.wrapped:
+            for value in obj.wrapped.values(): # Leaking RDHList details...
                 if not self.type.is_copyable_from(get_type_of_value(value)):
                     return True
 
@@ -146,9 +146,11 @@ class ListWildcardGetter(MicroOp):
             default_factory_op = default_factory_op_type.create(self.target, self.through_type)
             value = default_factory_op.invoke(key)
 
-        type_of_value = get_type_of_value(value)
-        if not self.type.is_copyable_from(type_of_value):
-            raise raise_if_safe(InvalidDereferenceType, self.type_error)
+        if value is not SPARSE_ELEMENT:
+            type_of_value = get_type_of_value(value)
+            if not self.type.is_copyable_from(type_of_value):
+                raise raise_if_safe(InvalidDereferenceType, self.type_error)
+
         return value
 
 
@@ -344,7 +346,8 @@ class ListWildcardSetter(MicroOp):
             raise FatalError()
 
         if key < 0 or key > len(self.target):
-            raise raise_if_safe(InvalidAssignmentKey, self.can_fail)
+            if self.key_error:
+                raise InvalidAssignmentKey()
 
         for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
             other_micro_op_type.unbind(key, self.target)
@@ -638,7 +641,7 @@ class ListInsert(MicroOp):
 
 
 class ListType(CompositeType):
-    def __init__(self, element_types, wildcard_type, allow_push=True, allow_wildcard_insert=True, allow_delete=True):
+    def __init__(self, element_types, wildcard_type, allow_push=True, allow_wildcard_insert=True, allow_delete=True, is_sparse=False):
         micro_ops = {}
 
         for index, element_type in enumerate(element_types):
@@ -659,12 +662,12 @@ class ListType(CompositeType):
 
             micro_ops[("get-wildcard",)] = ListWildcardGetterType(wildcard_type, True, False)
             if not const:
-                micro_ops[("set-wildcard",)] = ListWildcardSetterType(wildcard_type, True, False)
+                micro_ops[("set-wildcard",)] = ListWildcardSetterType(wildcard_type, not is_sparse, False)
             if allow_push:
                 micro_ops[("insert", 0)] = ListInsertType(wildcard_type, 0, False, False)
             if allow_delete:
                 micro_ops[("delete-wildcard",)] = ListWildcardDeletterType(True)
             if allow_wildcard_insert:
-                micro_ops[("insert-wildcard",)] = ListWildcardInsertType(wildcard_type, True, False)
+                micro_ops[("insert-wildcard",)] = ListWildcardInsertType(wildcard_type, not is_sparse, False)
 
         super(ListType, self).__init__(micro_ops)
