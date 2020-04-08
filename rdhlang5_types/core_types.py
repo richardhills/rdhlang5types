@@ -70,3 +70,9 @@ class OneOfType(Type):
             if t.is_copyable_from(other):
                 return True
         return False
+
+
+class Const(object):
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+

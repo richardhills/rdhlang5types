@@ -1,36 +1,58 @@
-from rdhlang5_types.exceptions import MicroOpConflict, FatalError
+from rdhlang5_types.exceptions import MicroOpConflict, FatalError, \
+    MicroOpTypeConflict
 
 
 class MicroOpType(object):
-    def create(self, target):
-        raise NotImplementedError()
+    def create(self, target, through_type):
+        raise NotImplementedError(self)
 
-    def check_for_new_micro_op_type_conflict(self, other_micro_op_type):
-        raise NotImplementedError()
+    def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
+        raise NotImplementedError(self)
 
-    def check_for_micro_op_conflict(self, micro_op, args):
-        raise NotImplementedError()
+    def raise_on_micro_op_conflict(self, micro_op, args):
+        raise NotImplementedError(self)
 
     def check_for_data_conflict(self, obj):
-        raise NotImplementedError()     
+        raise NotImplementedError(self)     
 
     def merge(self, other_micro_op_type):
-        raise NotImplementedError()
+        raise NotImplementedError(self)
+
+    def unbind(self, key, target):
+        raise NotImplementedError(self)
+
+    def bind(self, key, target):
+        raise NotImplementedError(self)
+
+    def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
+        if self.check_for_data_conflict(obj):
+            raise MicroOpTypeConflict()
+
+        for other_micro_op_type in micro_op_types:
+            first_check = other_micro_op_type.check_for_new_micro_op_type_conflict(self, micro_op_types)
+            # These functions should be symmetrical so this second call shouldn't be necessary
+            # Remove for performance when confident about this!
+            second_check = self.check_for_new_micro_op_type_conflict(other_micro_op_type, micro_op_types)
+            if first_check != second_check:
+                other_micro_op_type.check_for_new_micro_op_type_conflict(self, micro_op_types)
+                self.check_for_new_micro_op_type_conflict(other_micro_op_type, micro_op_types)
+                raise FatalError()
+            if first_check:
+                other_micro_op_type.check_for_new_micro_op_type_conflict(self, micro_op_types)
+                raise MicroOpTypeConflict()
 
 
 class MicroOp(object):
     def invoke(self, *args):
-        raise NotImplementedError()
+        raise NotImplementedError(self)
 
     def bind_to_in_place_value(self):
-        raise NotImplementedError()
+        raise NotImplementedError(self)
 
 
-def check_micro_op_conflicts(micro_op, args, other_micro_op_types):
+def raise_micro_op_conflicts(micro_op, args, other_micro_op_types):
     for other_micro_op_type in other_micro_op_types:
-        if other_micro_op_type.check_for_micro_op_conflict(micro_op, args):
-            if micro_op.can_fail:
-                raise MicroOpConflict()
-            else:
-                raise FatalError()
+        other_micro_op_type.raise_on_micro_op_conflict(micro_op, args)
+
+
 

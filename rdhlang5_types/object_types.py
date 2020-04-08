@@ -1,374 +1,508 @@
-from rdhlang5_types.exceptions import MicroOpConflict
-
 from rdhlang5_types.composites import get_type_of_value, get_manager, bind_type_to_value, \
-    CompositeType
-from rdhlang5_types.core_types import merge_types, OneOfType, AnyType
-from rdhlang5_types.micro_ops import MicroOpType, MicroOp, check_micro_op_conflicts
+    CompositeType, DefaultFactoryType, unbind_type_to_value
+from rdhlang5_types.core_types import merge_types, OneOfType, AnyType, Const
+from rdhlang5_types.exceptions import FatalError, MicroOpConflict, raise_if_safe, \
+    InvalidAssignmentType, InvalidDereferenceKey, InvalidDereferenceType, \
+    MicroOpTypeConflict
+from rdhlang5_types.micro_ops import MicroOpType, MicroOp, raise_micro_op_conflicts
 
 
-class InvalidDereference(object):
-    pass
+WILDCARD = object()
+MISSING = object()
+
+def get_key_and_type(micro_op_type):
+    if isinstance(micro_op_type, (ObjectWildcardGetterType, ObjectWildcardSetterType, ObjectWildcardDeletterType)):
+        key = WILDCARD
+    elif isinstance(micro_op_type, (ObjectGetterType, ObjectSetterType, ObjectDeletterType)):
+        key = micro_op_type.key
+    else:
+        raise FatalError()
+
+    if isinstance(micro_op_type, (ObjectWildcardGetterType, ObjectGetterType, ObjectWildcardSetterType, ObjectSetterType)):
+        type = micro_op_type.type
+    else:
+        type = MISSING
+
+    return key, type
 
 
-class CompositeObjectWildcardGetterType(MicroOpType):
+def get_key_and_new_value(micro_op, args):
+    if isinstance(micro_op, (ObjectWildcardGetter, ObjectWildcardDeletter)):
+        key, = args
+        new_value = MISSING
+    elif isinstance(micro_op, (ObjectGetter, ObjectDeletter)):
+        key = micro_op.key
+        new_value = MISSING
+    elif isinstance(micro_op, ObjectWildcardSetter):
+        key, new_value = args
+    elif isinstance(micro_op, ObjectSetter):
+        key = micro_op.key
+        new_value = args[0]
+    else:
+        raise FatalError()
+    if new_value is not None:
+        get_manager(new_value)
+    return key, new_value
 
-    def __init__(self, type, can_fail):
+class ObjectWildcardGetterType(MicroOpType):
+    def __init__(self, type, key_error, type_error):
         self.type = type
-        self.can_fail = can_fail
+        self.key_error = key_error
+        self.type_error = type_error
 
-    def create(self, target):
-        return CompositeObjectWildcardGetter(target, self.type)
+    def create(self, target, through_type):
+        return ObjectWildcardGetter(target, through_type, self.type, self.key_error, self.type_error)
 
-    def check_for_new_micro_op_type_conflict(self, other_micro_op_type):
-        if self.can_fail or other_micro_op_type.can_fail:
-            return False
-        if isinstance(other_micro_op_type, (CompositeObjectSetterType, CompositeObjectWildcardSetterType)):
-            if not self.type.is_copyable_from(other_micro_op_type.type):
-                return True
-        if isinstance(other_micro_op_type, (CompositeObjectDeletterType, CompositeObjectWildcardDeletterType)):
-            return True
-        return False
-
-    def check_for_micro_op_conflict(self, other_micro_op, args):
-        if self.can_fail:
-            return False
-        if isinstance(other_micro_op, (CompositeObjectSetter, CompositeObjectWildcardSetter)):
-            if isinstance(other_micro_op, CompositeObjectSetter):
-                new_value = args[0]
-            else:
-                new_value = args[1]
-            if not self.type.is_copyable_from(get_type_of_value(new_value)):
-                return True
-
-        if isinstance(other_micro_op, (CompositeObjectDeletter, CompositeObjectWildcardDeletter)):
-            return True
-        return False
-
-    def check_for_data_conflict(self, obj):
-        return True
-
-    def merge(self, other_micro_op_type):
-        return CompositeObjectWildcardGetterType(merge_types([ self.type, other_micro_op_type.type ]), self.can_fail or other_micro_op_type.can_fail)
-
-
-class CompositeObjectWildcardGetter(MicroOp):
-
-    def __init__(self, target, type):
-        self.target = target
-        self.type = type
-
-    def invoke(self, key):
-        try:
-            check_micro_op_conflicts(self, [ key ], get_manager(self.target).get_flattened_micro_op_types())
-        except MicroOpConflict:
-            raise InvalidDereference()
-
-        value = self.target.__dict__[key]
-        type_of_value = get_type_of_value(value)
-        if not self.type.is_copyable_from(type_of_value):
-            raise InvalidDereference()
-        return value
-
-    def bind_to_in_place_value(self):
-        for value in self.target.__dict__.values():
+    def bind(self, key, target):
+        if key is not None:
+            keys = [ key ]
+        else:
+            keys = target.__dict__.keys()
+        for k in keys:
+            value = target.__dict__[k]
+            get_manager(value)
             bind_type_to_value(self.type, value)
 
+    def unbind(self, key, target):
+        if key is not None:
+            keys = [ key ]
+        else:
+            keys = target.__dict__.keys()
+        for k in keys:
+            unbind_type_to_value(self.type, target.__dict__[k])
 
-class CompositeObjectGetterType(MicroOpType):
+    def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
+        default_factories = [ o for o in micro_op_types if isinstance(o, DefaultFactoryType)]
+        has_default_factory = len(default_factories) > 0
 
-    def __init__(self, key, type, can_fail):
-        self.key = key
-        self.type = type
-        self.can_fail = can_fail
+        if not self.key_error:
+            if not has_default_factory:
+                raise MicroOpTypeConflict()
+            default_factory = default_factories[0]
+            if not self.type.is_copyable_from(default_factory.type):
+                raise MicroOpTypeConflict()
 
-    def create(self, target):
-        return CompositeObjectGetter(target, self.key, self.type)
+        return super(ObjectWildcardGetterType, self).check_for_conflicts_with_existing_micro_ops(obj, micro_op_types)
 
-    def check_for_new_micro_op_type_conflict(self, other_micro_op_type):
-        if (isinstance(other_micro_op_type, (CompositeObjectGetterType, CompositeObjectSetterType, CompositeObjectDeletterType))
-            and self.key != other_micro_op_type.key
-        ):
-            return False
-        if self.can_fail or other_micro_op_type.can_fail:
-            return False
-        if isinstance(other_micro_op_type, (CompositeObjectSetterType, CompositeObjectWildcardSetterType)):
-            if not self.type.is_copyable_from(other_micro_op_type.type):
+    def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
+        if not self.key_error:
+            if not any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types):
                 return True
-        if isinstance(other_micro_op_type, (CompositeObjectDeletterType, CompositeObjectWildcardDeletterType)):
-            return True
+
+        if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
+            return False
+        if isinstance(other_micro_op_type, (ObjectSetterType, ObjectWildcardSetterType)):
+            if not self.type_error and not self.type.is_copyable_from(other_micro_op_type.type):
+                return True
+        if isinstance(other_micro_op_type, (ObjectDeletterType, ObjectWildcardDeletterType)):
+            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types)
+            if not self.key_error and not has_default_factory:
+                return True
         return False
 
-    def check_for_micro_op_conflict(self, other_micro_op, args):
-        if self.can_fail:
-            return False
-        if (isinstance(other_micro_op, (CompositeObjectSetter, CompositeObjectDeletter))
-            and self.key != other_micro_op.key
-        ):
-            return False
-        if (isinstance(other_micro_op, (CompositeObjectWildcardSetter, CompositeObjectWildcardDeletter))
-            and self.key != args[0]
-        ):
-            return False
+    def raise_on_micro_op_conflict(self, other_micro_op, args):
+        if isinstance(other_micro_op, (ObjectSetter, ObjectWildcardSetter)):
+            _, new_value = get_key_and_new_value(other_micro_op, args)
+            if not self.type_error and not self.type.is_copyable_from(get_type_of_value(new_value)):
+                raise_if_safe(InvalidAssignmentType, other_micro_op.type_error)
 
-        if isinstance(other_micro_op, (CompositeObjectSetter, CompositeObjectWildcardSetter)):
-            if isinstance(other_micro_op, CompositeObjectSetter):
-                new_value = args[0]
-            else:
-                new_value = args[1]
-            if not self.type.is_copyable_from(get_type_of_value(new_value)):
-                return True
-        if isinstance(other_micro_op, (CompositeObjectDeletter, CompositeObjectWildcardDeletter)):
-            return True
+        if isinstance(other_micro_op, (ObjectDeletter, ObjectWildcardDeletter)):
+            if not self.key_error:
+                raise_if_safe(InvalidAssignmentType, other_micro_op.key_error)
         return False
 
     def check_for_data_conflict(self, obj):
-        missing = object()
-        value = obj.__dict__.get(self.key, missing)
-        if value is missing:
+        if not self.key_error and get_manager(obj).default_factory is None:
             return True
-        type_of_value = get_type_of_value(value)
-        return not self.type.is_copyable_from(type_of_value)
+
+        if not self.type_error:
+            for value in obj.__dict__.values():
+                get_manager(value)
+                if not self.type.is_copyable_from(get_type_of_value(value)):
+                    return True
+
+        return False
 
     def merge(self, other_micro_op_type):
-        return CompositeObjectGetterType(self.key, merge_types([ self.type, other_micro_op_type.type ]), self.can_fail or other_micro_op_type.can_fail)
+        return ObjectWildcardGetterType(
+            merge_types([ self.type, other_micro_op_type.type ]),
+            self.key_error or other_micro_op_type.key_error,
+            self.type_error or other_micro_op_type.type_error
+        )
 
 
-class CompositeObjectGetter(MicroOp):
+class ObjectWildcardGetter(MicroOp):
 
-    def __init__(self, target, key, type):
+    def __init__(self, target, through_type, type, key_error, type_error):
         self.target = target
-        self.key = key
+        self.through_type = through_type
         self.type = type
+        self.key_error = key_error
+        self.type_error = type_error
 
-    def invoke(self):
-        try:
-            check_micro_op_conflicts(self, [], get_manager(self.target).get_flattened_micro_op_types())
-        except MicroOpConflict:
-            raise InvalidDereference()
+    def invoke(self, key):
+        raise_micro_op_conflicts(self, [ key ], get_manager(self.target).get_flattened_micro_op_types())
 
-        value = self.target.__dict__[self.key]
+        if key in self.target.__dict__:
+            value = self.target.__dict__[key]
+        else:
+            default_factory_op_type = get_manager(self.target).get_micro_op_type(self.through_type, ("default-factory", ))
+
+            if not default_factory_op_type:
+                raise_if_safe(InvalidDereferenceKey, self.key_error)
+
+            default_factory_op = default_factory_op_type.create(self.target, self.through_type)
+            value = default_factory_op.invoke(key)
+
+        get_manager(value)
+
         type_of_value = get_type_of_value(value)
         if not self.type.is_copyable_from(type_of_value):
-            raise InvalidDereference()
+            raise raise_if_safe(InvalidDereferenceType, self.type_error)
         return value
 
-    def bind_to_in_place_value(self):
-        current_value = self.target.__dict__[self.key]
-        bind_type_to_value(self.type, current_value)
-
-
-class InvalidAssignment(Exception):
-    pass
-
-
-class CompositeObjectWildcardSetterType(MicroOpType):
-
-    def __init__(self, type, can_fail):
+class ObjectGetterType(MicroOpType):
+    def __init__(self, key, type, key_error, type_error):
+        self.key = key
         self.type = type
-        self.can_fail = can_fail
+        self.key_error = key_error
+        self.type_error = type_error
 
-    def create(self, target):
-        return CompositeObjectWildcardSetter(target, self.type)
+    def create(self, target, through_type):
+        return ObjectGetter(target, through_type, self.key, self.type, self.key_error, self.type_error)
 
-    def check_for_new_micro_op_type_conflict(self, other_micro_op_type):
-        if self.can_fail or other_micro_op_type.can_fail:
+    def bind(self, key, target):
+        if key is not None and key != self.key:
+            return
+        value = target.__dict__[self.key]
+        get_manager(value)
+        bind_type_to_value(self.type, value)
+
+    def unbind(self, key, target):
+        if key is not None and key != self.key:
+            return
+        unbind_type_to_value(self.type, target.__dict__[key])
+
+    def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
+        default_factories = [ isinstance(o, DefaultFactoryType) for o in micro_op_types ]
+        has_default_factory = len(default_factories) > 0
+        has_value_in_place = self.key in obj.__dict__
+
+        if not self.key_error and not has_value_in_place:
+            if not has_default_factory:
+                raise MicroOpTypeConflict()
+            default_factory = default_factories[0]
+            if not self.type.is_copyable_from(default_factory.type):
+                raise MicroOpTypeConflict()
+
+        return super(ObjectGetterType, self).check_for_conflicts_with_existing_micro_ops(obj, micro_op_types)
+
+    def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
+        if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
             return False
-        if isinstance(other_micro_op_type, (CompositeObjectGetterType, CompositeObjectWildcardGetterType)):
-            if not other_micro_op_type.type.is_copyable_from(self.type):
+        if isinstance(other_micro_op_type, (ObjectSetterType, ObjectWildcardSetterType)):
+            other_key, other_type = get_key_and_type(other_micro_op_type)
+            if other_key is not WILDCARD and other_key != self.key:
+                return False
+            if not self.type_error and not other_micro_op_type.type_error and not self.type.is_copyable_from(other_type):
+                return True
+        if isinstance(other_micro_op_type, (ObjectDeletterType, ObjectWildcardDeletterType)):
+            other_key, _ = get_key_and_type(other_micro_op_type)
+            if other_key is not WILDCARD and other_key != self.key:
+                return False
+
+            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types)
+            if not self.key_error and not has_default_factory:
                 return True
         return False
 
-    def check_for_micro_op_conflict(self, other_micro_op, args):
+    def raise_on_micro_op_conflict(self, other_micro_op, args):
+        if isinstance(other_micro_op, (ObjectGetter, ObjectWildcardGetter)):
+            return
+        if isinstance(other_micro_op, (ObjectSetter, ObjectWildcardSetter)):
+            other_key, other_new_value = get_key_and_new_value(other_micro_op, args)
+            if other_key != self.key:
+                return
+            if not self.type_error and not self.type.is_copyable_from(get_type_of_value(other_new_value)):
+                raise_if_safe(InvalidAssignmentType, other_micro_op.type_error)
+        if isinstance(other_micro_op, (ObjectDeletter, ObjectWildcardDeletter)):
+            other_key, _ = get_key_and_new_value(other_micro_op, args)
+            if not self.key_error and other_key == self.key:
+                raise raise_if_safe(InvalidDereferenceKey, other_micro_op.key_error)
+
+    def check_for_data_conflict(self, obj):
+        value_in_place = obj.__dict__[self.key]
+        get_manager(value_in_place)
+        type_of_value = get_type_of_value(value_in_place)
+        if not self.type.is_copyable_from(type_of_value):
+            return True
+
         return False
+
+    def merge(self, other_micro_op_type):
+        return ObjectGetterType(
+            self.key,
+            merge_types([ self.type, other_micro_op_type.type ]),
+            self.key_error or other_micro_op_type.key_error,
+            self.type_error or other_micro_op_type.type_error
+        )
+
+
+class ObjectGetter(MicroOp):
+    def __init__(self, target, through_type, key, type, key_error, type_error):
+        self.target = target
+        self.through_type = through_type
+        self.key = key
+        self.type = type
+        self.key_error = key_error
+        self.type_error = type_error
+
+    def invoke(self):
+        raise_micro_op_conflicts(self, [], get_manager(self.target).get_flattened_micro_op_types())
+
+        if self.key in self.target.__dict__:
+            value = self.target.__dict__[self.key]
+        else:
+            default_factory_op = get_manager(self.target).get_micro_op_type(self.through_type, ("default-factory", ))
+
+            if default_factory_op:
+                value = default_factory_op.invoke(self.key)
+            else:
+                raise_if_safe(InvalidDereferenceKey, self.key_error)
+
+        get_manager(value)
+
+        type_of_value = get_type_of_value(value)
+
+        if not self.type.is_copyable_from(type_of_value):
+            raise raise_if_safe(InvalidDereferenceType, self.type_error)
+
+        return value
+
+
+class ObjectWildcardSetterType(MicroOpType):
+    def __init__(self, type, key_error, type_error):
+        self.type = type
+        self.key_error = key_error
+        self.type_error = type_error
+
+    def create(self, target, through_type):
+        return ObjectWildcardSetter(target, self.type, self.key_error, self.type_error)
+
+    def bind(self, key, target):
+        pass
+
+    def unbind(self, key, target):
+        pass
+
+    def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
+        if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
+            if not self.type_error and not other_micro_op_type.type_error and not other_micro_op_type.type.is_copyable_from(self.type):
+                return True
+        return False
+
+    def raise_on_micro_op_conflict(self, other_micro_op, args):
+        pass
 
     def check_for_data_conflict(self, obj):
         return False
 
     def merge(self, other_micro_op_type):
-        return CompositeObjectWildcardSetterType(merge_types([ self.type, other_micro_op_type.type ]), self.can_fail or other_micro_op_type.can_fail)
+        return ObjectWildcardSetterType(
+            merge_types([ self.type, other_micro_op_type.type ]),
+            self.key_error or other_micro_op_type.key_error,
+            self.type_error or other_micro_op_type.type_error
+        )
 
-
-class CompositeObjectWildcardSetter(MicroOp):
-
-    def __init__(self, target, type):
+class ObjectWildcardSetter(MicroOp):
+    def __init__(self, target, type, key_error, type_error):
         self.target = target
         self.type = type
+        self.key_error = key_error
+        self.type_error = type_error
 
     def invoke(self, key, new_value):
-        try:
-            check_micro_op_conflicts(self, [ key, new_value ], get_manager(self.target).get_flattened_micro_op_types())
-        except MicroOpConflict:
-            raise InvalidAssignment()
+        get_manager(new_value)
+        raise_micro_op_conflicts(self, [ key, new_value ], get_manager(self.target).get_flattened_micro_op_types())
 
         new_value_type = get_type_of_value(new_value)
         if not self.type.is_copyable_from(new_value_type):
-            raise InvalidAssignment()
+            raise FatalError()
+
+        for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
+            other_micro_op_type.unbind(key, self.target)
+
         self.target.__dict__[key] = new_value
 
-        bind_type_to_value(self.type, new_value)
-
-    def bind_to_in_place_value(self):
-        pass
+        for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
+            other_micro_op_type.bind(key, self.target)
 
 
-class CompositeObjectSetterType(MicroOpType):
-
-    def __init__(self, key, type, can_fail):
+class ObjectSetterType(MicroOpType):
+    def __init__(self, key, type, key_error, type_error):
         self.key = key
         self.type = type
-        self.can_fail = can_fail
+        self.key_error = key_error
+        self.type_error = type_error
 
-    def create(self, target):
-        return CompositeObjectSetter(target, self.key, self.type)
+    def create(self, target, through_type):
+        return ObjectSetter(target, self.key, self.type, self.key_error, self.type_error)
 
-    def check_for_new_micro_op_type_conflict(self, other_micro_op_type):
-        if (isinstance(other_micro_op_type, (CompositeObjectGetterType, CompositeObjectSetterType, CompositeObjectDeletterType))
-            and self.key != other_micro_op_type.key
-        ):
-            return False
-        if self.can_fail or other_micro_op_type.can_fail:
-            return False
-        if isinstance(other_micro_op_type, (CompositeObjectGetterType, CompositeObjectWildcardGetterType)):
-            if not other_micro_op_type.type.is_copyable_from(self.type):
+    def bind(self, key, target):
+        pass
+
+    def unbind(self, key, target):
+        pass
+
+    def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
+        if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
+            other_key, other_type = get_key_and_type(other_micro_op_type)
+            if other_key is not WILDCARD and other_key != self.key:
+                return False
+            if not self.type_error and not other_micro_op_type.type_error and not other_type.is_copyable_from(self.type):
                 return True
         return False
 
-    def check_for_micro_op_conflict(self, other_micro_op, args):
-        return False
+    def raise_on_micro_op_conflict(self, other_micro_op, args):
+        pass
 
     def check_for_data_conflict(self, obj):
         return False
 
     def merge(self, other_micro_op_type):
-        return CompositeObjectSetterType(self.key, merge_types([ self.type, other_micro_op_type.type ]), self.can_fail or other_micro_op_type.can_fail)
+        return ObjectSetterType(
+            self.key,
+            merge_types([ self.type, other_micro_op_type.type ]),
+            self.key_error or other_micro_op_type.key_error,
+            self.type_error or other_micro_op_type.type_error
+        )
 
+class ObjectSetter(MicroOp):
 
-class CompositeObjectSetter(MicroOp):
-
-    def __init__(self, target, key, type):
+    def __init__(self, target, key, type, key_error, type_error):
         self.target = target
         self.key = key
         self.type = type
+        self.key_error = key_error
+        self.type_error = type_error
 
     def invoke(self, new_value):
-        try:
-            check_micro_op_conflicts(self, [ new_value ], get_manager(self.target).get_flattened_micro_op_types())
-        except MicroOpConflict:
-            raise InvalidAssignment()
+        get_manager(new_value)
+        raise_micro_op_conflicts(self, [ new_value ], get_manager(self.target).get_flattened_micro_op_types())
 
         new_value_type = get_type_of_value(new_value)
         if not self.type.is_copyable_from(new_value_type):
-            raise InvalidAssignment()
+            raise FatalError()
+
+        for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
+            other_micro_op_type.unbind(self.key, self.target)
+
         self.target.__dict__[self.key] = new_value
 
-        bind_type_to_value(self.type, new_value)
-
-    def bind_to_in_place_value(self):
-        pass
+        for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
+            other_micro_op_type.bind(self.key, self.target)
 
 
 class InvalidDeletion(Exception):
     pass
 
 
-class CompositeObjectWildcardDeletterType(MicroOpType):
+class ObjectWildcardDeletterType(MicroOpType):
 
-    def __init__(self, can_fail):
-        self.can_fail = can_fail
+    def __init__(self, key_error):
+        self.key_error = key_error
 
-    def create(self, target):
-        return CompositeObjectWildcardDeletter(target)
+    def create(self, target, through_type):
+        return ObjectWildcardDeletter(target, self.key_error)
 
-    def check_for_new_micro_op_type_conflict(self, other_micro_op_type):
-        if self.can_fail or other_micro_op_type.can_fail:
-            return False
-        if isinstance(other_micro_op_type, (CompositeObjectGetterType, CompositeObjectWildcardGetterType)):
-            return True
+    def bind(self, key, target):
+        pass
+
+    def unbind(self, key, target):
+        pass
+
+    def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
+        if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
+            default_factories = [ o for o in other_micro_op_types if isinstance(o, DefaultFactoryType)]
+            has_default_factory = len(default_factories) > 0
+
+            if not other_micro_op_type.key_error and not has_default_factory:
+                return True
         return False
 
-    def check_for_micro_op_conflict(self, other_micro_op, args):
+    def raise_on_micro_op_conflict(self, other_micro_op, args):
         return False
 
     def check_for_data_conflict(self, obj):
         return False
 
-    def bind_to_in_place_value(self):
-        pass
-
     def merge(self, other_micro_op_type):
-        return CompositeObjectWildcardDeletterType(self.can_fail or other_micro_op_type.can_fail)
+        return ObjectWildcardDeletterType(
+            self.key_error or other_micro_op_type.key_error
+        )
 
 
-class CompositeObjectWildcardDeletter(MicroOp):
+class ObjectWildcardDeletter(MicroOp):
 
-    def __init__(self, target):
+    def __init__(self, target, key_error):
         self.target = target
+        self.key_error = key_error
 
     def invoke(self, key):
-        try:
-            check_micro_op_conflicts(self, [ key ], get_manager(self.target).get_flattened_micro_op_types())
-        except MicroOpConflict:
-            raise InvalidDeletion()
+        raise_micro_op_conflicts(self, [ key ], get_manager(self.target).get_flattened_micro_op_types())
+
+        for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
+            other_micro_op_type.unbind(key, self.target)
 
         del self.target.__dict__[key]
 
-    def bind_to_in_place_value(self):
+
+class ObjectDeletterType(MicroOpType):
+    def __init__(self, key, key_error):
+        self.key = key
+        self.key_error = key_error
+
+    def create(self, target, through_type):
+        return ObjectDeletter(target, self.key, self.key_error)
+
+    def bind(self, key, target):
         pass
 
+    def unbind(self, key, target):
+        pass
 
-class CompositeObjectDeletterType(MicroOpType):
-
-    def __init__(self, key, can_fail):
-        self.key = key
-        self.can_fail = can_fail
-
-    def create(self, target):
-        return CompositeObjectDeletter(target, self.key)
-
-    def check_for_new_micro_op_type_conflict(self, other_micro_op_type):
-        if (isinstance(other_micro_op_type, (CompositeObjectGetterType, CompositeObjectSetterType, CompositeObjectDeletterType))
-            and self.key != other_micro_op_type.key
-        ):
-            return False
-        if self.can_fail or other_micro_op_type.can_fail:
-            return False
-        if isinstance(other_micro_op_type, (CompositeObjectGetterType, CompositeObjectWildcardGetterType)):
-            return True
+    def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
+        if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
+            other_key, _ = get_key_and_type(other_micro_op_type)
+            if other_key is not WILDCARD and other_key != self.key:
+                return False
+            if not other_micro_op_type.key_error:
+                return True
         return False
 
-    def check_for_micro_op_conflict(self, other_micro_op, args):
-        return False
+    def raise_on_micro_op_conflict(self, other_micro_op, args):
+        pass
 
     def check_for_data_conflict(self, obj):
         return False
 
     def merge(self, other_micro_op_type):
-        return CompositeObjectDeletterType(self.key, self.can_fail or other_micro_op_type.can_fail)
+        return ObjectDeletterType(self.key, self.key_error or other_micro_op_type.key_error)
 
 
-class CompositeObjectDeletter(MicroOp):
-
-    def __init__(self, target, key):
+class ObjectDeletter(MicroOp):
+    def __init__(self, target, key, key_error):
         self.target = target
         self.key = key
+        self.key_error = key_error
 
     def invoke(self):
-        try:
-            check_micro_op_conflicts(self, [], get_manager(self.target).get_flattened_micro_op_types())
-        except MicroOpConflict:
-            raise InvalidDeletion()
+        raise_micro_op_conflicts(self, [ ], get_manager(self.target).get_flattened_micro_op_types())
+
+        for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
+            other_micro_op_type.unbind(self.key, self.target)
 
         del self.target.__dict__[self.key]
-
-    def bind_to_in_place_value(self):
-        pass
-
-
-class Const(object):
-
-    def __init__(self, wrapped):
-        self.wrapped = wrapped
-
 
 class ObjectType(CompositeType):
     def __init__(self, properties):
@@ -379,9 +513,9 @@ class ObjectType(CompositeType):
                 const = True
                 type = type.wrapped
 
-            micro_ops[("get", name)] = CompositeObjectGetterType(name, type, False)
+            micro_ops[("get", name)] = ObjectGetterType(name, type, False, False)
             if not const:
-                micro_ops[("set", name)] = CompositeObjectSetterType(name, type, False)
+                micro_ops[("set", name)] = ObjectSetterType(name, type, False, False)
 
         no_properties_object_type = None
         if len(properties) == 0:
@@ -389,8 +523,8 @@ class ObjectType(CompositeType):
         else:
             no_properties_object_type = ObjectType({})
 
-        micro_ops[("get-wildcard",)] = CompositeObjectWildcardGetterType(OneOfType([ no_properties_object_type, AnyType() ]), True)
-        micro_ops[("set-wildcard",)] = CompositeObjectWildcardSetterType(OneOfType([ no_properties_object_type, AnyType() ]), True)
+        micro_ops[("get-wildcard",)] = ObjectWildcardGetterType(OneOfType([ no_properties_object_type, AnyType() ]), True, False)
+        micro_ops[("set-wildcard",)] = ObjectWildcardSetterType(OneOfType([ no_properties_object_type, AnyType() ]), True, True)
 
         super(ObjectType, self).__init__(micro_ops)
 
@@ -399,9 +533,19 @@ class PythonObjectType(CompositeType):
     def __init__(self):
         micro_ops = {}
 
-        micro_ops[("get-wildcard",)] = CompositeObjectWildcardGetterType(OneOfType([ self, AnyType() ]), True)
-        micro_ops[("set-wildcard",)] = CompositeObjectWildcardSetterType(OneOfType([ self, AnyType() ]), False)
-        micro_ops[("delete-wildcard",)] = CompositeObjectWildcardDeletterType(True)
+        micro_ops[("get-wildcard",)] = ObjectWildcardGetterType(OneOfType([ self, AnyType() ]), True, False)
+        micro_ops[("set-wildcard",)] = ObjectWildcardSetterType(OneOfType([ self, AnyType() ]), False, False)
+        micro_ops[("delete-wildcard",)] = ObjectWildcardDeletterType(True)
 
         super(PythonObjectType, self).__init__(micro_ops)
 
+class DefaultDictType(CompositeType):
+    def __init__(self, type):
+        micro_ops = {}
+
+        micro_ops[("get-wildcard",)] = ObjectWildcardGetterType(type, False, False)
+        micro_ops[("set-wildcard",)] = ObjectWildcardSetterType(type, False, False)
+        micro_ops[("delete-wildcard",)] = ObjectWildcardDeletterType(False)
+        micro_ops[("default-factory",)] = DefaultFactoryType(type)
+
+        super(DefaultDictType, self).__init__(micro_ops)
