@@ -5,6 +5,7 @@ from rdhlang5_types.exceptions import FatalError, MicroOpConflict, raise_if_safe
     InvalidAssignmentType, InvalidDereferenceKey, InvalidDereferenceType, \
     MicroOpTypeConflict
 from rdhlang5_types.micro_ops import MicroOpType, MicroOp, raise_micro_op_conflicts
+from collections import OrderedDict
 
 
 WILDCARD = object()
@@ -72,7 +73,7 @@ class ObjectWildcardGetterType(MicroOpType):
             unbind_type_to_value(self.type, target.__dict__[k])
 
     def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
-        default_factories = [ o for o in micro_op_types if isinstance(o, DefaultFactoryType)]
+        default_factories = [ o for o in micro_op_types.values() if isinstance(o, DefaultFactoryType)]
         has_default_factory = len(default_factories) > 0
 
         if not self.key_error:
@@ -86,7 +87,7 @@ class ObjectWildcardGetterType(MicroOpType):
 
     def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
         if not self.key_error:
-            if not any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types):
+            if not any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types.values()):
                 return True
 
         if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
@@ -95,7 +96,7 @@ class ObjectWildcardGetterType(MicroOpType):
             if not self.type_error and not self.type.is_copyable_from(other_micro_op_type.type):
                 return True
         if isinstance(other_micro_op_type, (ObjectDeletterType, ObjectWildcardDeletterType)):
-            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types)
+            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types.values())
             if not self.key_error and not has_default_factory:
                 return True
         return False
@@ -125,7 +126,7 @@ class ObjectWildcardGetterType(MicroOpType):
 
     def merge(self, other_micro_op_type):
         return ObjectWildcardGetterType(
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "sub"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -211,7 +212,7 @@ class ObjectGetterType(MicroOpType):
             if other_key is not WILDCARD and other_key != self.key:
                 return False
 
-            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types)
+            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types.values())
             if not self.key_error and not has_default_factory:
                 return True
         return False
@@ -240,9 +241,11 @@ class ObjectGetterType(MicroOpType):
         return False
 
     def merge(self, other_micro_op_type):
+        if other_micro_op_type.key != self.key:
+            raise FatalError()
         return ObjectGetterType(
             self.key,
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "sub"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -309,7 +312,7 @@ class ObjectWildcardSetterType(MicroOpType):
 
     def merge(self, other_micro_op_type):
         return ObjectWildcardSetterType(
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "super"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -370,9 +373,11 @@ class ObjectSetterType(MicroOpType):
         return False
 
     def merge(self, other_micro_op_type):
+        if other_micro_op_type.key != self.key:
+            raise FatalError()
         return ObjectSetterType(
             self.key,
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "super"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -423,7 +428,7 @@ class ObjectWildcardDeletterType(MicroOpType):
 
     def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
         if isinstance(other_micro_op_type, (ObjectGetterType, ObjectWildcardGetterType)):
-            default_factories = [ o for o in other_micro_op_types if isinstance(o, DefaultFactoryType)]
+            default_factories = [ o for o in other_micro_op_types.values() if isinstance(o, DefaultFactoryType)]
             has_default_factory = len(default_factories) > 0
 
             if not other_micro_op_type.key_error and not has_default_factory:
@@ -541,11 +546,13 @@ class PythonObjectType(CompositeType):
 
 class DefaultDictType(CompositeType):
     def __init__(self, type):
-        micro_ops = {}
+        # Use an ordered dict because the default-factory needs to be in place
+        # for the later ops to work
+        micro_ops = OrderedDict()
 
+        micro_ops[("default-factory",)] = DefaultFactoryType(type)
         micro_ops[("get-wildcard",)] = ObjectWildcardGetterType(type, False, False)
         micro_ops[("set-wildcard",)] = ObjectWildcardSetterType(type, False, False)
         micro_ops[("delete-wildcard",)] = ObjectWildcardDeletterType(False)
-        micro_ops[("default-factory",)] = DefaultFactoryType(type)
 
         super(DefaultDictType, self).__init__(micro_ops)

@@ -17,7 +17,23 @@ class TestObject(object):
         for key, value in initial_data.items():
             self.__dict__[key] = value
 
-class TestTestObject(TestCase):
+class TestMicroOpMerging(TestCase):
+    def test_merge_gets(self):
+        first = ObjectGetterType("foo", IntegerType(), False, False)
+        second = ObjectGetterType("foo", UnitType(5), False, False)
+
+        combined = first.merge(second)
+        self.assertTrue(isinstance(combined.type, UnitType))
+        self.assertEqual(combined.type.value, 5)
+
+    def test_merge_sets(self):
+        first = ObjectSetterType("foo", IntegerType(), False, False)
+        second = ObjectSetterType("foo", UnitType(5), False, False)
+
+        combined = first.merge(second)
+        self.assertTrue(isinstance(combined.type, IntegerType))
+
+class TestBasicObject(TestCase):
     def test_add_micro_op_dictionary(self):
         return # doesn't work because type system doesn't support python dicts yet
         obj = { "foo": "hello" }
@@ -691,6 +707,13 @@ class TestListType(TestCase):
 
         self.assertTrue(foo.is_copyable_from(bar))
 
+    def test_pushing_into_long_tuple(self):
+        return # long tuples don't work yet
+        foo = ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False)
+        bar = ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False, allow_wildcard_insert=False)
+
+        self.assertTrue(foo.is_copyable_from(bar))
+
     def test_same_type_array_assignment(self):
         foo = ListType([ ], IntegerType())
         bar = ListType([ ], IntegerType())
@@ -763,9 +786,31 @@ class TestList(TestCase):
 
         self.assertEqual(foo[2], 8)
 
-    def test_insert(self):
+    def test_insert_at_start(self):
         foo = [ 4, 6, 8 ]
         get_manager(foo).add_composite_type(ListType([ ], IntegerType()))
+
+        foo.insert(0, 2)
+        self.assertEqual(list(foo), [ 2, 4, 6, 8 ])
+
+    def test_insert_with_wrong_type_blocked(self):
+        foo = [ 4, 6, 8 ]
+        get_manager(foo).add_composite_type(ListType([ ], IntegerType()))
+
+        with self.assertRaises(Exception):
+            foo.insert(0, "hello")
+
+    def test_insert_on_short_tuple(self):
+        foo = [ 4, 6, 8 ]
+        get_manager(foo).add_composite_type(ListType([ IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
+
+        foo.insert(0, 2)
+        self.assertEqual(list(foo), [ 2, 4, 6, 8 ])
+
+    def test_insert_on_long_tuple(self):
+        return # long tuples don't work yet
+        foo = [ 4, 6, 8 ]
+        get_manager(foo).add_composite_type(ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
 
         foo.insert(0, 2)
         self.assertEqual(list(foo), [ 2, 4, 6, 8 ])

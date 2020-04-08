@@ -73,7 +73,7 @@ class ListWildcardGetterType(MicroOpType):
 
     def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
         if not self.key_error:
-            if not any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types):
+            if not any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types.value()):
                 return True
 
         if isinstance(other_micro_op_type, (ListGetterType, ListWildcardGetterType)):
@@ -82,7 +82,7 @@ class ListWildcardGetterType(MicroOpType):
             if not self.type_error and not self.type.is_copyable_from(other_micro_op_type.type):
                 return True
         if isinstance(other_micro_op_type, (ListDeletterType, ListWildcardDeletterType)):
-            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types)
+            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types.values())
             if not self.key_error and not has_default_factory:
                 return True
         if isinstance(other_micro_op_type, (ListInsertType, ListWildcardInsertType)):
@@ -118,7 +118,7 @@ class ListWildcardGetterType(MicroOpType):
 
     def merge(self, other_micro_op_type):
         return ListWildcardGetterType(
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "super"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -197,7 +197,7 @@ class ListGetterType(MicroOpType):
                 elif self.key == other_key:
                     return not self.type.is_copyable_from(other_type)
                 else:
-                    return True  # Here, we should check for other microops at key - 1
+                    return True  # Be more liberal, check for other microops at key - 1
             else:
                 other_key, other_type = get_key_and_type(other_micro_op_type)
                 if not self.type.is_copyable_from(other_type):
@@ -220,10 +220,13 @@ class ListGetterType(MicroOpType):
             if not self.type_error and not self.type.is_copyable_from(get_type_of_value(new_value)):
                 raise_if_safe(InvalidAssignmentType, other_micro_op.type_error)
         if isinstance(other_micro_op, (ListInsert, ListWildcardInsert)):
-            other_key, _ = get_key_and_new_value(other_micro_op, args)
+            other_key, new_value = get_key_and_new_value(other_micro_op, args)
             if self.key < other_key:
                 return
-            else:
+            elif self.key == other_key:
+                if not self.type.is_copyable_from(get_type_of_value(new_value)):
+                    raise raise_if_safe(InvalidAssignmentType, other_micro_op.type_error)
+            elif self.key > other_key:
                 new_value = other_micro_op.target[self.key - 1]
                 if not self.type.is_copyable_from(get_type_of_value(new_value)):
                     raise raise_if_safe(InvalidAssignmentType, other_micro_op.type_error)
@@ -246,7 +249,7 @@ class ListGetterType(MicroOpType):
     def merge(self, other_micro_op_type):
         return ListGetterType(
             self.key,
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "super"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -312,7 +315,7 @@ class ListWildcardSetterType(MicroOpType):
 
     def merge(self, other_micro_op_type):
         return ListWildcardSetterType(
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "sub"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -377,7 +380,7 @@ class ListSetterType(MicroOpType):
     def merge(self, other_micro_op_type):
         return ListSetterType(
             self.key,
-            merge_types([ self.type, other_micro_op_type.type ]),
+            merge_types([ self.type, other_micro_op_type.type ], "sub"),
             self.key_error or other_micro_op_type.key_error,
             self.type_error or other_micro_op_type.type_error
         )
@@ -425,7 +428,7 @@ class ListWildcardDeletterType(MicroOpType):
 
     def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
         if isinstance(other_micro_op_type, (ListGetterType, ListWildcardGetterType)):
-            default_factories = [ o for o in other_micro_op_types if isinstance(o, DefaultFactoryType)]
+            default_factories = [ o for o in other_micro_op_types.values() if isinstance(o, DefaultFactoryType)]
             has_default_factory = len(default_factories) > 0
 
             if not other_micro_op_type.key_error and not has_default_factory:
@@ -578,11 +581,15 @@ class ListInsertType(MicroOpType):
     def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
         if isinstance(other_micro_op_type, (ListGetterType, ListWildcardGetterType)):
             other_key, other_type = get_key_and_type(other_micro_op_type)
-            if other_key is not WILDCARD and self.key > other_key:
-                return False
+            if other_key is not WILDCARD:
+                if self.key > other_key:
+                    return False
+                elif self.key == other_key:
+                    return not other_type.is_copyable_from(self.type)
+                elif self.key < other_key:
+                    return True # TODO: be more liberal
             else:
                 return not other_type.is_copyable_from(self.type)
-
         return False
 
     def raise_on_micro_op_conflict(self, other_micro_op, args):

@@ -42,15 +42,22 @@ def unwrap_types(type):
         return type.types
     return [ type ]
 
-def merge_types(types):
-    types = [unwrap_types(t) for t in types]
-    types = [item for sublist in types for item in sublist]
-
+def merge_types(types, mode):
     to_drop = []
     for i1, t1 in enumerate(types):
         for i2, t2 in enumerate(types):
-            if i1 > i2 and t1.is_copyable_from(t2):
-                to_drop.append(i2)
+            if i1 > i2 and t1.is_copyable_from(t2) and t2.is_copyable_from(t1):
+                to_drop.append(i1)
+
+    types = [t for i, t in enumerate(types) if i not in to_drop]
+
+    for i1, t1 in enumerate(types):
+        for i2, t2 in enumerate(types):
+            if i1 != i2 and t1.is_copyable_from(t2):
+                if mode == "super":
+                    to_drop.append(i2)
+                elif mode == "sub":
+                    to_drop.append(i1)
     types = [t for i, t in enumerate(types) if i not in to_drop]
 
     if len(types) == 0:

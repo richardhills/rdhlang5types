@@ -28,7 +28,7 @@ class MicroOpType(object):
         if self.check_for_data_conflict(obj):
             raise MicroOpTypeConflict()
 
-        for other_micro_op_type in micro_op_types:
+        for other_micro_op_type in micro_op_types.values():
             first_check = other_micro_op_type.check_for_new_micro_op_type_conflict(self, micro_op_types)
             # These functions should be symmetrical so this second call shouldn't be necessary
             # Remove for performance when confident about this!
@@ -54,5 +54,13 @@ def raise_micro_op_conflicts(micro_op, args, other_micro_op_types):
     for other_micro_op_type in other_micro_op_types:
         other_micro_op_type.raise_on_micro_op_conflict(micro_op, args)
 
-
+def merge_micro_op_types(micro_op_types_for_types):
+    result = {}
+    for micro_op_types in micro_op_types_for_types:
+        for tag, micro_op_type in micro_op_types.items():
+            if tag in result:
+                result[tag] = result[tag].merge(micro_op_type)
+            else:
+                result[tag] = micro_op_type
+    return result
 
