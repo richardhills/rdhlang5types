@@ -1,16 +1,17 @@
 from unittest import main
 from unittest.case import TestCase
 
-from munch import Munch
-
-from rdhlang5_types.composites import get_manager, get_type_of_value, \
-    RDHList, CompositeType, RDHObject, SPARSE_ELEMENT
-from rdhlang5_types.core_types import StringType, AnyType, IntegerType, UnitType, \
-    OneOfType, NoValueType
-from rdhlang5_types.exceptions import InvalidDereferenceKey
-from rdhlang5_types.list_types import ListType
-from rdhlang5_types.object_types import ObjectType, Const, PythonObjectType, \
-    DefaultDictType, ObjectGetterType, ObjectSetterType, ObjectDeletterType
+from rdhlang5_types.composites import CompositeType
+from rdhlang5_types.core_types import IntegerType, UnitType, StringType, AnyType, \
+    Const
+from rdhlang5_types.default_composite_types import DEFAULT_OBJECT_TYPE, \
+    rich_composite_type
+from rdhlang5_types.dict_types import RDHDictType, DictGetterType
+from rdhlang5_types.list_types import SPARSE_ELEMENT, RDHListType, RDHList
+from rdhlang5_types.managers import get_manager, get_type_of_value
+from rdhlang5_types.object_types import ObjectGetterType, ObjectSetterType, \
+    ObjectDeletterType, RDHObject, DefaultDictType, \
+    RDHObjectType, PythonObjectType
 
 
 class TestObject(object):
@@ -36,10 +37,9 @@ class TestMicroOpMerging(TestCase):
 
 class TestBasicObject(TestCase):
     def test_add_micro_op_dictionary(self):
-        return # doesn't work because type system doesn't support python dicts yet
         obj = { "foo": "hello" }
         get_manager(obj).add_composite_type(CompositeType({
-            ("get", "foo"): ObjectGetterType("foo", StringType(), False, False)
+            ("get", "foo"): DictGetterType("foo", StringType(), False, False)
         }))
 
     def test_add_micro_op_object(self):
@@ -47,12 +47,6 @@ class TestBasicObject(TestCase):
             pass
         obj = Foo()
         obj.foo = "hello"
-        get_manager(obj).add_composite_type(CompositeType({
-            ("get", "foo"): ObjectGetterType("foo", StringType(), False, False)
-        }))
-
-    def test_add_micro_op_munch(self):
-        obj = TestObject({ "foo": "hello" })
         get_manager(obj).add_composite_type(CompositeType({
             ("get", "foo"): ObjectGetterType("foo", StringType(), False, False)
         }))
@@ -177,13 +171,13 @@ class TestBasicObject(TestCase):
         self.assertFalse(hasattr(obj, "foo"))
 
 
-class TestCompositeType(TestCase):
+class TestRDHObjectType(TestCase):
     def test_basic_class(self):
-        T = ObjectType({
+        T = RDHObjectType({
             "foo": IntegerType()
         })
 
-        S = ObjectType({
+        S = RDHObjectType({
             "foo": IntegerType(),
             "bar": StringType()
         })
@@ -192,11 +186,11 @@ class TestCompositeType(TestCase):
         self.assertFalse(S.is_copyable_from(T))
 
     def test_const_allows_broader_types(self):
-        T = ObjectType({
+        T = RDHObjectType({
             "foo": Const(AnyType())
         })
 
-        S = ObjectType({
+        S = RDHObjectType({
             "foo": IntegerType()
         })
 
@@ -204,11 +198,11 @@ class TestCompositeType(TestCase):
         self.assertFalse(S.is_copyable_from(T))
 
     def test_broad_type_assignments_blocked(self):
-        T = ObjectType({
+        T = RDHObjectType({
             "foo": AnyType()
         })
 
-        S = ObjectType({
+        S = RDHObjectType({
             "foo": IntegerType()
         })
 
@@ -216,10 +210,10 @@ class TestCompositeType(TestCase):
         self.assertFalse(S.is_copyable_from(T))
 
     def test_simple_fields_are_required(self):
-        T = ObjectType({
+        T = RDHObjectType({
         })
 
-        S = ObjectType({
+        S = RDHObjectType({
             "foo": IntegerType()
         })
 
@@ -227,12 +221,12 @@ class TestCompositeType(TestCase):
         self.assertFalse(S.is_copyable_from(T))
 
     def test_many_fields_are_required(self):
-        T = ObjectType({
+        T = RDHObjectType({
             "foo": IntegerType(),
             "bar": IntegerType(),
         })
 
-        S = ObjectType({
+        S = RDHObjectType({
             "foo": IntegerType(),
             "bar": IntegerType(),
             "baz": IntegerType()
@@ -248,7 +242,7 @@ class TestCompositeType(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({ "foo": Const(IntegerType()) })
+            RDHObjectType({ "foo": Const(IntegerType()) })
         )
 
         with self.assertRaises(Exception):
@@ -262,7 +256,7 @@ class TestCompositeType(TestCase):
         }
 
         get_manager(foo).add_composite_type(
-            ObjectType({ "foo": Const(IntegerType()) })
+            RDHObjectType({ "foo": Const(IntegerType()) })
         )
 
         with self.assertRaises(Exception):
@@ -274,14 +268,14 @@ class TestCompositeType(TestCase):
             "bar": "hello"
         })
         get_manager(foo).add_composite_type(
-            ObjectType({ "foo": IntegerType() })
+            RDHObjectType({ "foo": IntegerType() })
         )
         get_manager(foo).add_composite_type(
-            ObjectType({ "bar": StringType() })
+            RDHObjectType({ "bar": StringType() })
         )
         object_type = get_type_of_value(foo)
 
-        ObjectType({
+        RDHObjectType({
             "foo": IntegerType(),
             "bar": StringType()
         }).is_copyable_from(object_type)
@@ -292,7 +286,7 @@ class TestUnitTypes(TestCase):
         foo = TestObject({
             "bar": 42
         })
-        get_manager(foo).add_composite_type(ObjectType({
+        get_manager(foo).add_composite_type(RDHObjectType({
             "bar": UnitType(42)
         }))
         self.assertEquals(foo.bar, 42)
@@ -301,12 +295,12 @@ class TestUnitTypes(TestCase):
         foo = TestObject({
             "bar": 42
         })
-        get_manager(foo).add_composite_type(ObjectType({
+        get_manager(foo).add_composite_type(RDHObjectType({
             "bar": UnitType(42)
         }))
 
         with self.assertRaises(Exception):
-            get_manager(foo).add_composite_type(ObjectType({
+            get_manager(foo).add_composite_type(RDHObjectType({
                 "bar": IntegerType()
             }))
 
@@ -314,11 +308,11 @@ class TestUnitTypes(TestCase):
         foo = TestObject({
             "bar": 42
         })
-        get_manager(foo).add_composite_type(ObjectType({
+        get_manager(foo).add_composite_type(RDHObjectType({
             "bar": IntegerType()
         }))
         with self.assertRaises(Exception):
-            get_manager(foo).add_composite_type(ObjectType({
+            get_manager(foo).add_composite_type(RDHObjectType({
                 "bar": UnitType(42)
             }))
 
@@ -326,16 +320,16 @@ class TestUnitTypes(TestCase):
         foo = TestObject({
             "bar": 42
         })
-        get_manager(foo).add_composite_type(ObjectType({
+        get_manager(foo).add_composite_type(RDHObjectType({
             "bar": UnitType(42)
         }))
 
-        get_manager(foo).add_composite_type(ObjectType({
+        get_manager(foo).add_composite_type(RDHObjectType({
             "bar": Const(IntegerType())
         }))
 
 
-class TestNestedCompositeTypes(TestCase):
+class TestNestedRDHObjectTypes(TestCase):
     def test_basic_assignment(self):
         foo = TestObject({
             "bar": TestObject({
@@ -344,8 +338,8 @@ class TestNestedCompositeTypes(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({
-                "bar": ObjectType({
+            RDHObjectType({
+                "bar": RDHObjectType({
                     "baz": IntegerType()
                 })
             })
@@ -363,8 +357,8 @@ class TestNestedCompositeTypes(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({
-                "bar": ObjectType({
+            RDHObjectType({
+                "bar": RDHObjectType({
                     "baz": IntegerType()
                 })
             })
@@ -381,8 +375,8 @@ class TestNestedCompositeTypes(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({
-                "bar": ObjectType({
+            RDHObjectType({
+                "bar": RDHObjectType({
                     "baz": IntegerType()
                 })
             })
@@ -399,8 +393,8 @@ class TestNestedCompositeTypes(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({
-                "bar": ObjectType({
+            RDHObjectType({
+                "bar": RDHObjectType({
                     "baz": AnyType()
                 })
             })
@@ -420,9 +414,9 @@ class TestNestedCompositeTypes(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({
-                "bar": ObjectType({
-                    "baz": ObjectType({
+            RDHObjectType({
+                "bar": RDHObjectType({
+                    "baz": RDHObjectType({
                         "bam": IntegerType()
                     })
                 })
@@ -443,8 +437,8 @@ class TestNestedCompositeTypes(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({
-                "bar": ObjectType({
+            RDHObjectType({
+                "bar": RDHObjectType({
                     "baz": IntegerType()
                 })
             })
@@ -452,8 +446,8 @@ class TestNestedCompositeTypes(TestCase):
 
         with self.assertRaises(Exception):
             get_manager(foo).add_composite_type(
-                ObjectType({
-                    "bar": ObjectType({
+                RDHObjectType({
+                    "bar": RDHObjectType({
                         "baz": AnyType()
                     })
                 })
@@ -479,7 +473,7 @@ class TestNestedCompositeTypes(TestCase):
         })
 
         get_manager(foo).add_composite_type(
-            ObjectType({ "bar": AnyType() })
+            RDHObjectType({ "bar": AnyType() })
         )
 
         foo.bar = "hello"
@@ -509,7 +503,7 @@ class TestNestedPythonTypes(TestCase):
             "bar": bar
         })
 
-        get_manager(bar).add_composite_type(ObjectType({ "baz": IntegerType() }))
+        get_manager(bar).add_composite_type(RDHObjectType({ "baz": IntegerType() }))
         get_manager(foo).add_composite_type(PythonObjectType())
 
         self.assertEqual(foo.bar.baz, 42)
@@ -524,7 +518,7 @@ class TestNestedPythonTypes(TestCase):
             "bar": bar
         })
 
-        get_manager(bar).add_composite_type(ObjectType({ "baz": IntegerType() }))
+        get_manager(bar).add_composite_type(RDHObjectType({ "baz": IntegerType() }))
         get_manager(foo).add_composite_type(PythonObjectType())
 
         with self.assertRaises(Exception):
@@ -538,7 +532,7 @@ class TestNestedPythonTypes(TestCase):
             "bar": bar
         })
 
-        get_manager(bar).add_composite_type(ObjectType({ "baz": IntegerType() }))
+        get_manager(bar).add_composite_type(RDHObjectType({ "baz": IntegerType() }))
         get_manager(foo).add_composite_type(PythonObjectType())
 
         foo.bar = TestObject({
@@ -557,7 +551,7 @@ class TestNestedPythonTypes(TestCase):
             "bar": bar
         })
 
-        get_manager(bar).add_composite_type(ObjectType({ "baz": IntegerType() }))
+        get_manager(bar).add_composite_type(RDHObjectType({ "baz": IntegerType() }))
         get_manager(foo).add_composite_type(PythonObjectType())
 
         foo.bar = TestObject({
@@ -565,7 +559,7 @@ class TestNestedPythonTypes(TestCase):
         })
 
         with self.assertRaises(Exception):
-            get_manager(foo.bar).add_composite_type(ObjectType({ "baz": IntegerType() }))
+            get_manager(foo.bar).add_composite_type(RDHObjectType({ "baz": IntegerType() }))
 
     def test_python_delete_works(self):
         foo = TestObject({
@@ -622,7 +616,7 @@ class TestListObjects(TestCase):
     def test_basic_list_of_ints(self):
         foo = [ 1, 2, 3 ]
 
-        get_manager(foo).add_composite_type(ListType([], IntegerType()))
+        get_manager(foo).add_composite_type(RDHListType([], IntegerType()))
 
         foo[0] = 42
         self.assertEqual(foo[0], 42)
@@ -630,7 +624,7 @@ class TestListObjects(TestCase):
     def test_basic_tuple_of_ints(self):
         foo = [ 1, 2, 3 ]
 
-        get_manager(foo).add_composite_type(ListType([ IntegerType(), IntegerType(), IntegerType() ], None))
+        get_manager(foo).add_composite_type(RDHListType([ IntegerType(), IntegerType(), IntegerType() ], None))
 
         foo[0] = 42
         self.assertEqual(foo[0], 42)
@@ -639,121 +633,140 @@ class TestListObjects(TestCase):
         foo = [ 1, 2 ]
 
         with self.assertRaises(Exception):
-            get_manager(foo).add_composite_type(ListType([ IntegerType(), IntegerType(), IntegerType() ], None))
+            get_manager(foo).add_composite_type(RDHListType([ IntegerType(), IntegerType(), IntegerType() ], None))
 
+class TestMisc(TestCase):
+    # Tests for random things that were broken
+    def test_misc1(self):
+        # Came up testing rdhlang5 local variable binding
+        RDHObject({
+            "local": RDHList([ 39, 3 ]),
+            "types": RDHObject()
+        }, bind=RDHObjectType({
+            "local": RDHListType([ IntegerType(), IntegerType() ], None),
+            "types": DEFAULT_OBJECT_TYPE
+        }, wildcard_type=rich_composite_type))
 
-class TestListType(TestCase):
+    def test_misc2(self):
+        # Came up writing test_misc1
+        RDHObject({
+            "local": RDHList([ 39, 3 ])
+        }, bind=RDHObjectType({
+            "local": RDHListType([ IntegerType(), IntegerType() ], None)
+        }, wildcard_type=rich_composite_type))
+
+class TestRDHListType(TestCase):
     def test_simple_list_assignment(self):
-        foo = ListType([], IntegerType())
-        bar = ListType([], IntegerType())
+        foo = RDHListType([], IntegerType())
+        bar = RDHListType([], IntegerType())
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_simple_tuple_assignment(self):
-        foo = ListType([ IntegerType(), IntegerType() ], None)
-        bar = ListType([ IntegerType(), IntegerType() ], None)
+        foo = RDHListType([ IntegerType(), IntegerType() ], None)
+        bar = RDHListType([ IntegerType(), IntegerType() ], None)
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_broadening_tuple_assignment_blocked(self):
-        foo = ListType([ AnyType(), AnyType() ], None)
-        bar = ListType([ IntegerType(), IntegerType() ], None)
+        foo = RDHListType([ AnyType(), AnyType() ], None)
+        bar = RDHListType([ IntegerType(), IntegerType() ], None)
 
         self.assertFalse(foo.is_copyable_from(bar))
 
     def test_narrowing_tuple_assignment_blocked(self):
-        foo = ListType([ IntegerType(), IntegerType() ], None)
-        bar = ListType([ AnyType(), AnyType() ], None)
+        foo = RDHListType([ IntegerType(), IntegerType() ], None)
+        bar = RDHListType([ AnyType(), AnyType() ], None)
 
         self.assertFalse(foo.is_copyable_from(bar))
 
     def test_broadening_tuple_assignment_allowed_with_const(self):
-        foo = ListType([ Const(AnyType()), Const(AnyType()) ], None)
-        bar = ListType([ IntegerType(), IntegerType() ], None)
+        foo = RDHListType([ Const(AnyType()), Const(AnyType()) ], None)
+        bar = RDHListType([ IntegerType(), IntegerType() ], None)
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_truncated_tuple_slice_assignment(self):
-        foo = ListType([ IntegerType() ], None)
-        bar = ListType([ IntegerType(), IntegerType() ], None)
+        foo = RDHListType([ IntegerType() ], None)
+        bar = RDHListType([ IntegerType(), IntegerType() ], None)
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_expanded_tuple_slice_assignment_blocked(self):
-        foo = ListType([ IntegerType(), IntegerType() ], None)
-        bar = ListType([ IntegerType() ], None)
+        foo = RDHListType([ IntegerType(), IntegerType() ], None)
+        bar = RDHListType([ IntegerType() ], None)
 
         self.assertFalse(foo.is_copyable_from(bar))
   
     def test_convert_tuple_to_list(self):
-        foo = ListType([ ], IntegerType(), allow_delete=False, allow_wildcard_insert=False, allow_push=False)
-        bar = ListType([ IntegerType(), IntegerType() ], None)
+        foo = RDHListType([ ], IntegerType(), allow_delete=False, allow_wildcard_insert=False, allow_push=False)
+        bar = RDHListType([ IntegerType(), IntegerType() ], None)
 
         self.assertTrue(foo.is_copyable_from(bar))
     def test_const_covariant_array_assignment_allowed(self):
-        foo = ListType([ ], Const(AnyType()), allow_push=False, allow_wildcard_insert=False)
-        bar = ListType([ ], IntegerType())
+        foo = RDHListType([ ], Const(AnyType()), allow_push=False, allow_wildcard_insert=False)
+        bar = RDHListType([ ], IntegerType())
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_convert_tuple_to_list_with_deletes_blocked(self):
-        foo = ListType([ ], IntegerType())
-        bar = ListType([ IntegerType(), IntegerType() ], None)
+        foo = RDHListType([ ], IntegerType())
+        bar = RDHListType([ IntegerType(), IntegerType() ], None)
 
         self.assertFalse(foo.is_copyable_from(bar))
 
     def test_pushing_into_short_tuple(self):
-        foo = ListType([ IntegerType() ], IntegerType(), allow_delete=False)
-        bar = ListType([ IntegerType() ], IntegerType(), allow_delete=False, allow_wildcard_insert=False)
+        foo = RDHListType([ IntegerType() ], IntegerType(), allow_delete=False)
+        bar = RDHListType([ IntegerType() ], IntegerType(), allow_delete=False, allow_wildcard_insert=False)
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_pushing_into_long_tuple(self):
-        foo = ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False)
-        bar = ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False, allow_wildcard_insert=False)
+        foo = RDHListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False)
+        bar = RDHListType([ IntegerType(), IntegerType() ], IntegerType(), allow_delete=False, allow_wildcard_insert=False)
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_same_type_array_assignment(self):
-        foo = ListType([ ], IntegerType())
-        bar = ListType([ ], IntegerType())
+        foo = RDHListType([ ], IntegerType())
+        bar = RDHListType([ ], IntegerType())
 
         self.assertTrue(foo.is_copyable_from(bar))
 
     def test_covariant_array_assignment_blocked(self):
-        foo = ListType([ ], AnyType())
-        bar = ListType([ ], IntegerType())
+        foo = RDHListType([ ], AnyType())
+        bar = RDHListType([ ], IntegerType())
 
         self.assertFalse(foo.is_copyable_from(bar))
 
 class TestList(TestCase):
     def test_simple_list_assignment(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([], IntegerType()))
+        get_manager(foo).add_composite_type(RDHListType([], IntegerType()))
 
     def test_list_modification_wrong_type_blocked(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([], IntegerType()))
+        get_manager(foo).add_composite_type(RDHListType([], IntegerType()))
 
         with self.assertRaises(Exception):
             foo.append("hello")
 
     def test_list_modification_right_type_ok(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([], IntegerType()))
+        get_manager(foo).add_composite_type(RDHListType([], IntegerType()))
 
         foo.append(10)
 
     def test_list_appending_blocked(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([], None))
+        get_manager(foo).add_composite_type(RDHListType([], None))
 
         with self.assertRaises(Exception):
             foo.append(10)
 
     def test_mixed_type_tuple(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ IntegerType(), AnyType() ], None))
+        get_manager(foo).add_composite_type(RDHListType([ IntegerType(), AnyType() ], None))
 
         with self.assertRaises(Exception):
             foo[0] = "hello"
@@ -765,7 +778,7 @@ class TestList(TestCase):
 
     def test_outside_tuple_access_blocked(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ IntegerType(), AnyType() ], None))
+        get_manager(foo).add_composite_type(RDHListType([ IntegerType(), AnyType() ], None))
 
         with self.assertRaises(Exception):
             foo[2]
@@ -774,7 +787,7 @@ class TestList(TestCase):
 
     def test_outside_tuple_access_allowed(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ ], AnyType(), allow_push=False, allow_delete=False, allow_wildcard_insert=False))
+        get_manager(foo).add_composite_type(RDHListType([ ], AnyType(), allow_push=False, allow_delete=False, allow_wildcard_insert=False))
 
         self.assertEqual(foo[2], 8)
         foo[2] = "hello"
@@ -782,59 +795,71 @@ class TestList(TestCase):
 
     def test_combined_const_list_and_tuple(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ IntegerType(), AnyType() ], Const(AnyType()), allow_push=False, allow_delete=False, allow_wildcard_insert=False))
+        get_manager(foo).add_composite_type(RDHListType([ IntegerType(), AnyType() ], Const(AnyType()), allow_push=False, allow_delete=False, allow_wildcard_insert=False))
 
         self.assertEqual(foo[2], 8)
 
     def test_insert_at_start(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ ], IntegerType()))
+        get_manager(foo).add_composite_type(RDHListType([ ], IntegerType()))
 
         foo.insert(0, 2)
         self.assertEqual(list(foo), [ 2, 4, 6, 8 ])
 
     def test_insert_with_wrong_type_blocked(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ ], IntegerType()))
+        get_manager(foo).add_composite_type(RDHListType([ ], IntegerType()))
 
         with self.assertRaises(Exception):
             foo.insert(0, "hello")
 
     def test_insert_on_short_tuple(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
+        get_manager(foo).add_composite_type(RDHListType([ IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
 
         foo.insert(0, 2)
         self.assertEqual(list(foo), [ 2, 4, 6, 8 ])
 
     def test_insert_on_long_tuple(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ IntegerType(), IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
+        get_manager(foo).add_composite_type(RDHListType([ IntegerType(), IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
 
         foo.insert(0, 2)
         self.assertEqual(list(foo), [ 2, 4, 6, 8 ])
 
+    def test_insert_on_very_long_tuple(self):
+        foo = [ 4, 6, 8, 10, 12, 14 ]
+        get_manager(foo).add_composite_type(RDHListType([ IntegerType(), IntegerType(), IntegerType(), IntegerType(), IntegerType(), IntegerType() ], IntegerType(), allow_push=True, allow_delete=False, allow_wildcard_insert=False))
+
+        foo.insert(0, 2)
+        self.assertEqual(list(foo), [ 2, 4, 6, 8, 10, 12, 14 ])
+
     def test_sparse_list_setting(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ ], IntegerType(), is_sparse=True))
+        get_manager(foo).add_composite_type(RDHListType([ ], IntegerType(), is_sparse=True))
 
         foo[4] = 12
         self.assertEqual(list(foo), [ 4, 6, 8, SPARSE_ELEMENT, 12 ])
 
     def test_sparse_list_inserting(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ ], IntegerType(), is_sparse=True))
+        get_manager(foo).add_composite_type(RDHListType([ ], IntegerType(), is_sparse=True))
 
         foo.insert(4, 12)
         self.assertEqual(list(foo), [ 4, 6, 8, SPARSE_ELEMENT, 12 ])
 
     def test_set_on_non_sparse_blocked(self):
         foo = [ 4, 6, 8 ]
-        get_manager(foo).add_composite_type(ListType([ ], IntegerType(), is_sparse=False))
+        get_manager(foo).add_composite_type(RDHListType([ ], IntegerType(), is_sparse=False))
 
         with self.assertRaises(IndexError):
             foo[4] = 12
 
+    def test_incorrect_type_blocked(self):
+        foo = [ 4, 6, 8 ]
+
+        with self.assertRaises(Exception):
+            get_manager(foo).add_composite_type(RDHListType([ ], StringType()))
 
 if __name__ == '__main__':
     main()

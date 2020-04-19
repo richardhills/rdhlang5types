@@ -1,11 +1,16 @@
-from rdhlang5_types.composites import get_type_of_value, get_manager, \
-    bind_type_to_value, CompositeType, DefaultFactoryType, SPARSE_ELEMENT
+from _abcoll import MutableSequence
+from collections import OrderedDict
+
+from rdhlang5_types.composites import DefaultFactoryType, CompositeType, \
+    Composite, CompositeObjectManager, bind_type_to_value, unbind_type_to_value
 from rdhlang5_types.core_types import Const, merge_types
 from rdhlang5_types.exceptions import FatalError, MicroOpConflict, raise_if_safe, \
     MicroOpTypeConflict, InvalidAssignmentType, InvalidDereferenceKey, \
-    InvalidDereferenceType, InvalidAssignmentKey
+    InvalidDereferenceType, InvalidAssignmentKey, MissingMicroOp
+from rdhlang5_types.managers import get_type_of_value, get_manager
 from rdhlang5_types.micro_ops import MicroOpType, MicroOp, \
     raise_micro_op_conflicts
+
 
 WILDCARD = object()
 MISSING = object()
@@ -42,8 +47,13 @@ def get_key_and_new_value(micro_op, args):
         raise FatalError()
     return key, new_value
 
+class ListMicroOpType(MicroOpType):
+    def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
+        if not isinstance(obj, RDHList):
+            raise MicroOpTypeConflict()
+        return super(ListMicroOpType, self).check_for_conflicts_with_existing_micro_ops(obj, micro_op_types)
 
-class ListWildcardGetterType(MicroOpType):
+class ListWildcardGetterType(ListMicroOpType):
     def __init__(self, type, key_error, type_error):
         self.type = type
         self.key_error = key_error
@@ -53,27 +63,43 @@ class ListWildcardGetterType(MicroOpType):
         return ListWildcardGetter(target, through_type, self.type, self.key_error, self.type_error)
 
     def bind(self, key, target):
-        pass
+        if key is not None:
+            keys = [ key ]
+        else:
+            keys = range(0, len(target.wrapped))
+        for k in keys:
+            value = target.wrapped[k]
+            get_manager(value)
+            bind_type_to_value(target, k, self.type, value)
 
     def unbind(self, key, target):
-        pass
+        if key is not None:
+            if key < 0 or key >= len(target):
+                return
+            keys = [ key ]
+        else:
+            keys = range(0, len(target))
+        for k in keys:
+            unbind_type_to_value(target, k, self.type, target.wrapped[k])
 
     def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
-        default_factories = [ o for o in micro_op_types if isinstance(o, DefaultFactoryType)]
-        has_default_factory = len(default_factories) > 0
+        default_factory = micro_op_types.get(("default-factory",), None)
+        has_default_factory = default_factory is not None
 
         if not self.key_error:
             if not has_default_factory:
                 raise MicroOpTypeConflict()
-            default_factory = default_factories[0]
             if not self.type.is_copyable_from(default_factory.type):
                 raise MicroOpTypeConflict()
 
         return super(ListWildcardGetterType, self).check_for_conflicts_with_existing_micro_ops(obj, micro_op_types)
 
     def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
-        if not self.key_error:
-            if not any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types.value()):
+        default_factory = other_micro_op_types.get(("default-factory",), None)
+        has_default_factory = default_factory is not None
+
+        if not self.key_error:        
+            if not has_default_factory:
                 return True
 
         if isinstance(other_micro_op_type, (ListGetterType, ListWildcardGetterType)):
@@ -82,7 +108,6 @@ class ListWildcardGetterType(MicroOpType):
             if not self.type_error and not self.type.is_copyable_from(other_micro_op_type.type):
                 return True
         if isinstance(other_micro_op_type, (ListDeletterType, ListWildcardDeletterType)):
-            has_default_factory = any(isinstance(o, DefaultFactoryType) for o in other_micro_op_types.values())
             if not self.key_error and not has_default_factory:
                 return True
         if isinstance(other_micro_op_type, (ListInsertType, ListWildcardInsertType)):
@@ -111,6 +136,7 @@ class ListWildcardGetterType(MicroOpType):
 
         if not self.type_error:
             for value in obj.wrapped.values(): # Leaking RDHList details...
+                get_manager(value)
                 if not self.type.is_copyable_from(get_type_of_value(value)):
                     return True
 
@@ -154,7 +180,7 @@ class ListWildcardGetter(MicroOp):
         return value
 
 
-class ListGetterType(MicroOpType):
+class ListGetterType(ListMicroOpType):
     def __init__(self, key, type, key_error, type_error):
         self.key = key
         self.type = type
@@ -165,20 +191,25 @@ class ListGetterType(MicroOpType):
         return ListGetter(target, through_type, self.key, self.type, self.key_error, self.type_error)
 
     def bind(self, key, target):
-        pass
+        if key is not None and key != self.key:
+            return
+        value = target.wrapped[self.key]
+        get_manager(value)
+        bind_type_to_value(target, key, self.type, value)
 
     def unbind(self, key, target):
-        pass
+        if key is not None and key != self.key:
+            return
+        unbind_type_to_value(target, key, self.type, target.wrapped[key])
 
     def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
-        default_factories = [ isinstance(o, DefaultFactoryType) for o in micro_op_types ]
-        has_default_factory = len(default_factories) > 0
+        default_factory = micro_op_types.get(("default-factory",), None)
+        has_default_factory = default_factory is not None
         has_value_in_place = self.key >= 0 and self.key < len(obj)
 
         if not self.key_error and not has_value_in_place:
             if not has_default_factory:
                 raise MicroOpTypeConflict()
-            default_factory = default_factories[0]
             if not self.type.is_copyable_from(default_factory.type):
                 raise MicroOpTypeConflict()
 
@@ -295,7 +326,7 @@ class ListGetter(MicroOp):
         return value
 
 
-class ListWildcardSetterType(MicroOpType):
+class ListWildcardSetterType(ListMicroOpType):
     def __init__(self, type, key_error, type_error):
         self.type = type
         self.key_error = key_error
@@ -357,7 +388,7 @@ class ListWildcardSetter(MicroOp):
         for other_micro_op_type in get_manager(self.target).get_flattened_micro_op_types():
             other_micro_op_type.bind(key, self.target)
 
-class ListSetterType(MicroOpType):
+class ListSetterType(ListMicroOpType):
     def __init__(self, key, type, key_error, type_error):
         self.key = key
         self.type = type
@@ -424,7 +455,7 @@ class ListSetter(MicroOp):
             other_micro_op_type.bind(self.key, self.target)
 
 
-class ListWildcardDeletterType(MicroOpType):
+class ListWildcardDeletterType(ListMicroOpType):
     def __init__(self, key_error):
         self.key_error = key_error
 
@@ -439,10 +470,10 @@ class ListWildcardDeletterType(MicroOpType):
 
     def check_for_new_micro_op_type_conflict(self, other_micro_op_type, other_micro_op_types):
         if isinstance(other_micro_op_type, (ListGetterType, ListWildcardGetterType)):
-            default_factories = [ o for o in other_micro_op_types.values() if isinstance(o, DefaultFactoryType)]
-            has_default_factory = len(default_factories) > 0
+            default_factory = other_micro_op_types.get(("default-factory",), None)
+            has_default_factory = default_factory is not None
 
-            if not other_micro_op_type.key_error and not has_default_factory:
+            if not other_micro_op_type.key_error and not self.key_error and not has_default_factory:
                 return True
         return False
 
@@ -472,7 +503,7 @@ class ListWildcardDeletter(MicroOp):
         self.target.__delitem__(raw=True)
 
 
-class ListDeletterType(MicroOpType):
+class ListDeletterType(ListMicroOpType):
     def __init__(self, key, key_error):
         self.key = key
         self.key_error = key_error
@@ -519,7 +550,7 @@ class ListDeletter(MicroOp):
         self.target.__delitem__(self.key, raw=True)
 
 
-class ListWildcardInsertType(MicroOpType):
+class ListWildcardInsertType(ListMicroOpType):
     def __init__(self, type, key_error, type_error):
         self.type = type
         self.key_error = key_error
@@ -547,6 +578,12 @@ class ListWildcardInsertType(MicroOpType):
     def check_for_data_conflict(self, obj):
         return False
 
+    def merge(self, other_micro_op_type):
+        return ListWildcardInsertType(
+            merge_types([ self.type, other_micro_op_type.type ], "sub"),
+            self.key_error or other_micro_op_type.key_error, self.type_error or other_micro_op_type.type_error
+        )
+
 
 class ListWildcardInsert(MicroOp):
     def __init__(self, target, type, key_error, type_error):
@@ -573,7 +610,7 @@ class ListWildcardInsert(MicroOp):
                 other_micro_op_type.bind(after_key, self.target)
 
 
-class ListInsertType(MicroOpType):
+class ListInsertType(ListMicroOpType):
     def __init__(self, type, key, key_error, type_error):
         self.type = type
         self.key = key
@@ -613,6 +650,12 @@ class ListInsertType(MicroOpType):
     def check_for_data_conflict(self, obj):
         return False
 
+    def merge(self, other_micro_op_type):
+        return ListInsertType(
+            merge_types([ self.type, other_micro_op_type.type ], "sub"),
+            self.key,
+            self.key_error or other_micro_op_type.key_error, self.type_error or other_micro_op_type.type_error
+        )
 
 class ListInsert(MicroOp):
     def __init__(self, target, key, type, key_error, type_error):
@@ -640,9 +683,9 @@ class ListInsert(MicroOp):
                 other_micro_op_type.bind(after_key, self.target)
 
 
-class ListType(CompositeType):
+class RDHListType(CompositeType):
     def __init__(self, element_types, wildcard_type, allow_push=True, allow_wildcard_insert=True, allow_delete=True, is_sparse=False):
-        micro_ops = {}
+        micro_ops = OrderedDict() #  Ordered so that dependencies from i+1 element on i are preserved
 
         for index, element_type in enumerate(element_types):
             const = False
@@ -670,4 +713,128 @@ class ListType(CompositeType):
             if allow_wildcard_insert:
                 micro_ops[("insert-wildcard",)] = ListWildcardInsertType(wildcard_type, not is_sparse, False)
 
-        super(ListType, self).__init__(micro_ops)
+        super(RDHListType, self).__init__(micro_ops)
+
+SPARSE_ELEMENT = object()
+
+class RDHList(Composite, MutableSequence, object):
+    def __init__(self, initial_data, bind=None):
+        self.wrapped = {
+            index: value for index, value in enumerate(initial_data)
+        }
+        self.length = len(initial_data)
+        if bind:
+            get_manager(self).add_composite_type(bind)
+
+    def __len__(self):
+        return self.length
+
+    def insert(self, index, element, raw=False):
+        if raw:
+            for i in reversed(range(index, self.length)):
+                self.wrapped[i + 1] = self.wrapped[i]
+            self.wrapped[index] = element
+            self.length = max(index + 1, self.length + 1)
+            return
+
+        manager = get_manager(self)
+        default_type = manager.default_type
+        if default_type is None:
+            raise AttributeError()
+        micro_op_type = manager.get_micro_op_type(default_type, ("insert", index))
+
+        if micro_op_type is not None:
+            micro_op = micro_op_type.create(self, default_type)
+            return micro_op.invoke(element)
+        else:
+            micro_op_type = manager.get_micro_op_type(default_type, ("insert-wildcard",))
+
+            if micro_op_type is None:
+                raise MissingMicroOp()
+
+            micro_op = micro_op_type.create(self, default_type)
+            micro_op.invoke(index, element)
+
+    def __setitem__(self, key, value, raw=False):
+        if raw:
+            self.wrapped[key] = value
+            self.length = max(self.length, key + 1)
+            return
+
+        try:
+            manager = get_manager(self)
+            default_type = manager.default_type
+            if default_type is None:
+                raise IndexError()
+            micro_op_type = manager.get_micro_op_type(default_type, ("set", key))
+            if micro_op_type is not None:
+                micro_op = micro_op_type.create(self, default_type)
+                micro_op.invoke(value)
+            else:
+                micro_op_type = manager.get_micro_op_type(default_type, ("set-wildcard",))
+    
+                if micro_op_type is None:
+                    raise MissingMicroOp()
+    
+                micro_op = micro_op_type.create(self, default_type)
+                micro_op.invoke(key, value)
+        except InvalidAssignmentKey:
+            raise IndexError()
+
+    def __getitem__(self, key, raw=False):
+        if raw:
+            if key < 0 or key >= self.length:
+                raise FatalError()
+            return self.wrapped.get(key, SPARSE_ELEMENT)
+
+        try:
+            manager = get_manager(self)
+            default_type = manager.default_type
+            if default_type is None:
+                raise IndexError()
+            micro_op_type = manager.get_micro_op_type(default_type, ("get", key))
+            if micro_op_type is not None:
+                micro_op = micro_op_type.create(self, default_type)
+                return micro_op.invoke()
+            else:
+                micro_op_type = manager.get_micro_op_type(default_type, ("get-wildcard",))
+
+                if micro_op_type is None:
+                    raise MissingMicroOp()
+
+                micro_op = micro_op_type.create(self, default_type)
+                return micro_op.invoke(key)
+        except InvalidDereferenceKey:
+            if key >= 0 and key < self.length:
+                return None
+            raise IndexError()
+
+    def __delitem__(self, key, raw=False):
+        if raw:
+            for i in reversed(range(key, self.length)):
+                self.wrapped[i - 1] = self.wrapped[i]
+            self.length -= 1
+            return
+
+        manager = get_manager(self)
+        default_type = manager.default_type
+        if default_type is None:
+            raise IndexError()
+        micro_op_type = manager.get_micro_op_type(default_type, ("delete", key))
+        if micro_op_type is not None:
+            micro_op = micro_op_type.create(self, default_type)
+            return micro_op.invoke()
+        else:
+            micro_op_type = manager.get_micro_op_type(default_type, ("delete-wildcard",))
+
+            if micro_op_type is None:
+                raise MissingMicroOp()
+
+            micro_op = micro_op_type.create(self, default_type)
+            return micro_op.invoke(key)
+
+    def __str__(self):
+        return str(list(self))
+
+    def __repr__(self):
+        return repr(list(self))

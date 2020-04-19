@@ -24,6 +24,9 @@ class MicroOpType(object):
     def bind(self, key, target):
         raise NotImplementedError(self)
 
+    def apply_crystal_value(self, target):
+        return target
+
     def check_for_conflicts_with_existing_micro_ops(self, obj, micro_op_types):
         if self.check_for_data_conflict(obj):
             raise MicroOpTypeConflict()
